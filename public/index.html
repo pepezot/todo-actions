@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ToDo · Demo GitHub Actions</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #1f2328; background: #f6f8fa; }
+    body { max-width: 36rem; margin: 3rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitulo { margin-top: 0; color: #59636e; }
+    form { display: flex; gap: 0.5rem; margin-top: 1.5rem; }
+    input[type="text"] { flex: 1; padding: 0.6rem 0.8rem; font-size: 1rem; border: 1px solid #d1d9e0; border-radius: 6px; }
+    button { padding: 0.6rem 1rem; font-size: 1rem; border: 0; border-radius: 6px; background: #1f883d; color: #fff; cursor: pointer; }
+    .erro { min-height: 1.5rem; margin: 0.5rem 0; color: #d1242f; }
+    ul { list-style: none; padding: 0; }
+    li { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; padding: 0.6rem 0.8rem; background: #fff; border: 1px solid #d1d9e0; border-radius: 6px; }
+    li span { flex: 1; overflow-wrap: anywhere; }
+    li.concluida span { color: #818b98; text-decoration: line-through; }
+    li button { padding: 0.2rem 0.5rem; background: transparent; color: #d1242f; }
+    .vazio { color: #59636e; }
+  </style>
+</head>
+<body>
+  <h1>✅ ToDo</h1>
+  <p class="subtitulo">App de demonstração — CI/CD com GitHub Actions</p>
+
+  <form id="form-tarefa">
+    <input id="titulo" type="text" placeholder="O que precisa ser feito?" autocomplete="off" aria-label="Título da tarefa">
+    <button type="submit">Adicionar</button>
+  </form>
+  <p id="erro" class="erro" role="alert"></p>
+
+  <ul id="lista"></ul>
+  <p id="vazio" class="vazio">Nenhuma tarefa ainda.</p>
+
+  <script>
+    const form = document.querySelector('#form-tarefa');
+    const input = document.querySelector('#titulo');
+    const erro = document.querySelector('#erro');
+    const lista = document.querySelector('#lista');
+    const vazio = document.querySelector('#vazio');
+
+    // Chama a API; em erro HTTP, lança a mensagem que o servidor devolveu.
+    async function api(method, path, body) {
+      const res = await fetch(path, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (res.status === 204) return null;
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      return data;
+    }
+
+    function criarItem(todo) {
+      const li = document.createElement('li');
+      li.classList.toggle('concluida', todo.done);
+
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = todo.done;
+      check.setAttribute('aria-label', 'Marcar como concluída');
+      check.addEventListener('change', () => api('PATCH', `/api/todos/${todo.id}`).then(carregar));
+
+      // textContent (e não innerHTML): o título vira texto puro, sem risco de XSS.
+      const titulo = document.createElement('span');
+      titulo.textContent = todo.title;
+
+      const remover = document.createElement('button');
+      remover.textContent = '✕';
+      remover.setAttribute('aria-label', 'Remover tarefa');
+      remover.addEventListener('click', () => api('DELETE', `/api/todos/${todo.id}`).then(carregar));
+
+      li.append(check, titulo, remover);
+      return li;
+    }
+
+    async function carregar() {
+      const todos = await api('GET', '/api/todos');
+      lista.replaceChildren(...todos.map(criarItem));
+      vazio.hidden = todos.length > 0;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      erro.textContent = '';
+      try {
+        await api('POST', '/api/todos', { title: input.value });
+        input.value = '';
+        await carregar();
+      } catch (e) {
+        erro.textContent = e.message;
+      }
+      input.focus();
+    });
+
+    carregar();
+  </script>
+</body>
+</html>

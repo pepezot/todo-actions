@@ -1,0 +1,214 @@
+# =============================================================================
+#  CI/CD do ToDo App — demonstração de GitHub Actions
+# -----------------------------------------------------------------------------
+#
+#        push na main  |  pull_request para a main  |  botão "Run workflow"
+#                                     |
+#                     +---------------+---------------+
+#                     |                               |
+#              test (Node 22)                  test (Node 24)    <- matriz, em paralelo
+#                     |                               |
+#                     +---------------+---------------+
+#                                     |
+#                              build (npm pack)                  <- gera o artifact
+#                                     |   só na main
+#                              deploy (simulado)                 <- environment + secret
+#
+#  Onde cada conceito dos slides aparece neste arquivo:
+#    on:                 → Events / Triggers .................... slide 5A
+#    jobs: / needs:      → Jobs e a ordem entre eles ............ slide 5B
+#    runs-on:            → Runner GitHub-hosted ................. slide 5B
+#    steps: uses / run   → Steps e Actions reutilizáveis ........ slides 5B e 5C
+#    permissions:        → GITHUB_TOKEN com menor privilégio .... slide 7
+#    environment:        → Environment + secret ................. slide 7
+# =============================================================================
+
+name: CI/CD
+
+# -----------------------------------------------------------------------------
+# EVENTS / TRIGGERS — o que dispara este workflow
+# -----------------------------------------------------------------------------
+on:
+  # Commit chegou na main → pipeline completo (test → build → deploy).
+  push:
+    branches: [main]
+
+  # PR aberto ou atualizado apontando para a main → test e build.
+  # É aqui que o CI mostra valor: valida a mudança ANTES do merge.
+  pull_request:
+    branches: [main]
+
+  # Cria o botão "Run workflow" na aba Actions.
+  # Útil na apresentação: dispara o pipeline sem precisar de commit.
+  workflow_dispatch:
+
+# -----------------------------------------------------------------------------
+# PERMISSÕES DO GITHUB_TOKEN — menor privilégio possível
+# O GitHub cria um token novo a cada job, e ele expira quando o job termina.
+# Aqui ele só pode LER o repositório. Um job que precisasse de mais
+# (ex.: comentar num PR) pediria explicitamente só aquela permissão.
+# -----------------------------------------------------------------------------
+permissions:
+  contents: read
+
+# -----------------------------------------------------------------------------
+# CONCORRÊNCIA — no máximo uma execução por branch/PR ao mesmo tempo.
+# Em PR: um push novo cancela a execução antiga (não gasta minuto à toa).
+# Na main: nunca cancela — interromper um deploy no meio é pior que esperar.
+# -----------------------------------------------------------------------------
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ===========================================================================
+  # JOB 1 — test
+  # ===========================================================================
+  test:
+    name: Testes (Node ${{ matrix.node-version }})
+
+    # RUNNER GitHub-hosted: uma VM Linux nova, criada para este job e
+    # descartada no fim. Nada sobra de uma execução para outra.
+    runs-on: ubuntu-latest
+
+    # Trava de segurança: job travado é cancelado em 10 minutos.
+    timeout-minutes: 10
+
+    # MATRIZ: o GitHub cria uma cópia deste job para cada valor da lista.
+    # As cópias rodam em PARALELO (aparecem lado a lado no grafo da execução).
+    strategy:
+      fail-fast: false            # se uma versão falhar, a outra termina mesmo assim
+      matrix:
+        node-version: [22, 24]    # as duas linhas LTS com suporte
+
+    steps:
+      # STEP com `uses` → reaproveita uma ACTION pronta.
+      # O runner começa vazio: o checkout clona o repositório dentro dele.
+      - name: Baixar o código
+        uses: actions/checkout@v7
+
+      # Outra action reutilizável. `with:` passa parâmetros (inputs) para ela.
+      # O projeto não tem dependências, então não há o que cachear.
+      # Num projeto com dependências, acrescente `cache: npm` aqui.
+      - name: Instalar Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # STEP com `run` → comando de shell executado no runner.
+      # `npm ci` instala exatamente o que está no package-lock.json
+      # e falha se ele estiver dessincronizado do package.json.
+      - name: Instalar dependências
+        run: npm ci
+
+      # Teste falhou → o comando sai com código ≠ 0 → step vermelho →
+      # job vermelho → build e deploy nem começam.
+      - name: Rodar testes
+        run: npm test
+
+  # ===========================================================================
+  # JOB 2 — build
+  # ===========================================================================
+  build:
+    name: Build (empacotar)
+
+    # DEPENDÊNCIA: só começa quando TODAS as cópias da matriz passarem.
+    needs: test
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Cada job roda numa VM diferente → é preciso baixar o código de novo.
+      - name: Baixar o código
+        uses: actions/checkout@v7
+
+      - name: Instalar Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # Gera todo-actions-<versão>.tgz com o que o campo "files"
+      # do package.json manda incluir (src/ e public/).
+      - name: Gerar pacote (.tgz)
+        run: npm pack
+
+      # ARTIFACT: é assim que um arquivo passa de um job para outro
+      # (VMs diferentes não compartilham disco). Ele também fica disponível
+      # para download na página da execução.
+      - name: Publicar artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: todo-app
+          path: todo-actions-*.tgz
+          if-no-files-found: error    # sem pacote = falha, em vez de passar em silêncio
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 3 — deploy (SIMULADO)
+  # ===========================================================================
+  deploy:
+    name: Deploy (simulado)
+    needs: build
+
+    # CONDIÇÃO: deploy só a partir da main, por push ou pelo botão manual.
+    # Em pull_request este job aparece como "skipped" — e, como é o único job
+    # que usa o secret, código vindo de PR nunca chega perto da credencial.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # ENVIRONMENT: agrupa secrets + regras de proteção (ex.: aprovação manual).
+    # O job só recebe os secrets do environment DEPOIS que as regras passam.
+    # Configure em Settings → Environments (passo a passo no README).
+    environment: producao
+
+    steps:
+      # Baixa o .tgz que o job build publicou.
+      - name: Baixar artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: todo-app
+
+      - name: Publicar (simulação)
+        # Boa prática: entregar valores ao script via `env:` em vez de escrever
+        # ${{ secrets.X }} dentro do `run:`. O valor não é colado no texto do
+        # script — e, para dados vindos de usuários (título de PR, nome de
+        # branch), isso evita script injection.
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$DEPLOY_TOKEN" ]; then
+            echo "::error title=Secret ausente::Crie o secret DEPLOY_TOKEN no environment 'producao' (veja o README)."
+            exit 1
+          fi
+
+          PACOTE=$(ls todo-actions-*.tgz)
+          echo "Publicando $PACOTE..."
+
+          # SÓ PARA A DEMO (o valor é falso): imprimimos o secret para mostrar
+          # que o GitHub o substitui por *** no log.
+          # O mascaramento só reconhece o valor EXATO: transformado (base64,
+          # cortado ao meio, URL-encoded) ele pode vazar. Em projeto real,
+          # nunca imprima secrets.
+          echo "Autenticando com o token: $DEPLOY_TOKEN"
+
+          sleep 2
+          echo "::notice title=Deploy concluído::$PACOTE publicado em produção (simulação)"
+
+      # JOB SUMMARY: markdown que aparece na página da execução.
+      - name: Resumo da execução
+        run: |
+          {
+            echo "## 🚀 Deploy simulado concluído"
+            echo ""
+            echo "| Item | Valor |"
+            echo "|---|---|"
+            echo "| Pacote | \`$(ls todo-actions-*.tgz)\` |"
+            echo "| Commit | \`${GITHUB_SHA::7}\` |"
+            echo "| Disparado por | @${GITHUB_ACTOR} (evento \`${GITHUB_EVENT_NAME}\`) |"
+            echo "| Environment | producao |"
+          } >> "$GITHUB_STEP_SUMMARY"
