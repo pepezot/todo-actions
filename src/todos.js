@@ -31,7 +31,7 @@ export function validateTitle(title) {
   // Normaliza ANTES de medir: "  a   b  " vira "a b". Assim espaço acidental não conta no limite.
   const normalized = title.trim().replace(/\s+/g, ' ');
 
-  if (normalized === '') throw new ValidationError('Digite um título para a tarefa.');
+  //if (normalized === '') throw new ValidationError('Digite um título para a tarefa.');
   if (normalized.length > MAX_TITLE_LENGTH) {
     throw new ValidationError(`O título pode ter no máximo ${MAX_TITLE_LENGTH} caracteres.`);
   }
