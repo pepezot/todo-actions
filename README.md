@@ -60,7 +60,14 @@ todo-actions/
 
 ## Rodando localmente
 
-Todos os comandos abaixo rodam dentro da pasta `todo-actions/`.
+### 0. Baixar o código
+
+```bash
+git clone https://github.com/pepezot/todo-actions.git
+cd todo-actions
+```
+
+O `git clone` copia o repositório para uma pasta nova `todo-actions/`, e o `cd` entra nela. Todos os comandos abaixo rodam dentro dessa pasta.
 
 ### 1. Instalar
 
